@@ -180,6 +180,18 @@ select option{background:var(--bg2)}
 .mini-btn:hover{border-color:var(--green-mid);color:var(--green);background:var(--green-light)}
 .mini-btn.primary{background:var(--green);color:var(--green-light);border-color:var(--green)}
 .mini-btn.primary:hover{background:var(--green2);border-color:var(--green2)}
+.mini-btn:disabled{opacity:0.5;cursor:not-allowed;pointer-events:none}
+
+/* Download progress */
+.dl-progress-wrap{
+  display:none;margin-bottom:10px;
+  background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:10px 12px;
+}
+.dl-progress-wrap.active{display:block}
+.dl-progress-label{font-size:11px;color:var(--text2);margin-bottom:6px;display:flex;justify-content:space-between}
+.dl-bar{height:3px;background:var(--border2);border-radius:2px;overflow:hidden}
+.dl-bar-fill{height:100%;width:0%;background:var(--green-mid);border-radius:2px;transition:width 0.2s ease}
 
 audio{width:100%;height:38px;border-radius:var(--radius-sm);margin-bottom:2px;display:block}
 .audio-error{
@@ -198,18 +210,22 @@ audio{width:100%;height:38px;border-radius:var(--radius-sm);margin-bottom:2px;di
 }
 .meta-pill i{font-size:12px;color:var(--green-mid)}
 
+/* LYRICS SECTION */
+.lyrics-section{margin-top:12px;border-top:1px solid var(--border);padding-top:12px}
+.lyrics-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:0}
 .lyrics-toggle{
   display:flex;align-items:center;gap:5px;
   font-size:12px;color:var(--text2);background:none;border:none;
-  cursor:pointer;padding:10px 0 0;font-family:var(--font);transition:color 0.15s;
+  cursor:pointer;padding:0;font-family:var(--font);transition:color 0.15s;
 }
 .lyrics-toggle:hover{color:var(--text)}
 .lyrics-toggle i{font-size:13px}
+.lyrics-actions{display:flex;gap:4px}
 .lyrics-box{
-  display:none;margin-top:8px;padding:12px;
+  display:none;margin-top:10px;padding:12px;
   background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);
   font-size:13px;color:var(--text2);line-height:1.9;white-space:pre-wrap;
-  max-height:200px;overflow-y:auto;
+  max-height:220px;overflow-y:auto;
 }
 .lyrics-box.open{display:block}
 
@@ -428,6 +444,75 @@ function getSongField(song){
   };
 }
 
+// ── DOWNLOAD AUDIO (dengan progress) ─────────────────────────
+async function downloadAudio(audioUrl, title, dlBtn, progressWrap, dlBarFill, dlLabel){
+  dlBtn.disabled=true;
+  dlBtn.innerHTML='<i class="ti ti-loader" style="animation:spin 0.7s linear infinite"></i> Mengunduh...';
+  progressWrap.classList.add('active');
+  dlBarFill.style.width='0%';
+  dlLabel.children[0].textContent='Mengunduh audio...';
+  dlLabel.children[1].textContent='0%';
+
+  try{
+    const res=await fetch(audioUrl);
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const contentLength=res.headers.get('Content-Length');
+    const total=contentLength?parseInt(contentLength,10):null;
+    const reader=res.body.getReader();
+    const chunks=[];
+    let received=0;
+
+    while(true){
+      const{done,value}=await reader.read();
+      if(done)break;
+      chunks.push(value);
+      received+=value.length;
+      if(total){
+        const pct=Math.round((received/total)*100);
+        dlBarFill.style.width=pct+'%';
+        dlLabel.children[1].textContent=pct+'%';
+      } else {
+        // indeterminate — animate bar back and forth
+        const fake=Math.min(90,Math.round((received/1000000)*10));
+        dlBarFill.style.width=fake+'%';
+        dlLabel.children[1].textContent=(received/1024/1024).toFixed(1)+' MB';
+      }
+    }
+
+    const blob=new Blob(chunks);
+    const blobUrl=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    // Tentukan ekstensi dari URL atau default ke mp3
+    const ext=audioUrl.split('?')[0].split('.').pop().toLowerCase();
+    const safeExt=['mp3','wav','ogg','flac','m4a','aac'].includes(ext)?ext:'mp3';
+    const safeTitle=(title||'audio').replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'-');
+    a.href=blobUrl;
+    a.download=safeTitle+'.'+safeExt;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(blobUrl),5000);
+
+    dlBarFill.style.width='100%';
+    dlLabel.children[0].textContent='Unduhan selesai!';
+    dlLabel.children[1].textContent='✓';
+    dlBtn.innerHTML='<i class="ti ti-check"></i> Selesai';
+    setTimeout(()=>{
+      progressWrap.classList.remove('active');
+      dlBarFill.style.width='0%';
+      dlBtn.disabled=false;
+      dlBtn.innerHTML='<i class="ti ti-download"></i> Download';
+    },2500);
+  }catch(err){
+    progressWrap.classList.remove('active');
+    dlBtn.disabled=false;
+    dlBtn.innerHTML='<i class="ti ti-download"></i> Download';
+    // Fallback: buka di tab baru
+    alert('Gagal mengunduh langsung ('+err.message+'). Mencoba membuka di tab baru...');
+    window.open(audioUrl,'_blank');
+  }
+}
+
 // ── SONG CARD ─────────────────────────────────────────────────
 function makeSongCard(song,i){
   const f=getSongField(song);
@@ -452,23 +537,32 @@ function makeSongCard(song,i){
     urlRow.innerHTML=`<i class="ti ti-file-music"></i><span class="audio-url-text">${escH(f.audioUrl)}</span>`;
     body.appendChild(urlRow);
 
+    // Download progress bar
+    const progressWrap=document.createElement('div');
+    progressWrap.className='dl-progress-wrap';
+    progressWrap.innerHTML=`<div class="dl-progress-label"><span>Mengunduh audio...</span><span>0%</span></div><div class="dl-bar"><div class="dl-bar-fill"></div></div>`;
+    body.appendChild(progressWrap);
+    const dlBarFill=progressWrap.querySelector('.dl-bar-fill');
+    const dlLabel=progressWrap.querySelector('.dl-progress-label');
+
     // Buttons
     const btnGroup=document.createElement('div');
     btnGroup.className='btn-group';
 
-    const copyBtn=document.createElement('button');
-    copyBtn.className='mini-btn';
-    copyBtn.innerHTML='<i class="ti ti-copy"></i> Copy URL';
-    copyBtn.onclick=()=>{
+    const copyUrlBtn=document.createElement('button');
+    copyUrlBtn.className='mini-btn';
+    copyUrlBtn.innerHTML='<i class="ti ti-copy"></i> Copy URL';
+    copyUrlBtn.onclick=()=>{
       navigator.clipboard.writeText(f.audioUrl);
-      copyBtn.innerHTML='<i class="ti ti-check"></i> Copied!';
-      setTimeout(()=>{copyBtn.innerHTML='<i class="ti ti-copy"></i> Copy URL';},1500);
+      copyUrlBtn.innerHTML='<i class="ti ti-check"></i> Copied!';
+      setTimeout(()=>{copyUrlBtn.innerHTML='<i class="ti ti-copy"></i> Copy URL';},1500);
     };
 
+    // ★ Download button (dengan progress)
     const dlBtn=document.createElement('button');
     dlBtn.className='mini-btn primary';
     dlBtn.innerHTML='<i class="ti ti-download"></i> Download';
-    dlBtn.onclick=()=>window.open(f.audioUrl,'_blank');
+    dlBtn.onclick=()=>downloadAudio(f.audioUrl,f.title,dlBtn,progressWrap,dlBarFill,dlLabel);
 
     if(f.videoUrl){
       const vidBtn=document.createElement('button');
@@ -478,7 +572,7 @@ function makeSongCard(song,i){
       btnGroup.appendChild(vidBtn);
     }
 
-    btnGroup.appendChild(copyBtn);
+    btnGroup.appendChild(copyUrlBtn);
     btnGroup.appendChild(dlBtn);
     body.appendChild(btnGroup);
 
@@ -518,19 +612,62 @@ function makeSongCard(song,i){
   if(f.songId){const p=document.createElement('div');p.className='meta-pill';p.innerHTML=`<i class="ti ti-id"></i>${escH(String(f.songId).slice(0,16))}`;pills.appendChild(p);}
   if(pills.children.length)body.appendChild(pills);
 
-  // Lyrics
+  // ★ LIRIK SECTION (dengan tombol salin)
   if(f.lyrics&&f.lyrics.length>10){
-    const lyrBtn=document.createElement('button');
-    lyrBtn.className='lyrics-toggle';
-    lyrBtn.innerHTML='<i class="ti ti-chevron-down"></i> Lihat lirik';
+    const lyrSection=document.createElement('div');
+    lyrSection.className='lyrics-section';
+
+    const lyrHeader=document.createElement('div');
+    lyrHeader.className='lyrics-header';
+
+    const lyrToggle=document.createElement('button');
+    lyrToggle.className='lyrics-toggle';
+    lyrToggle.innerHTML='<i class="ti ti-chevron-down"></i> Lihat lirik';
+
+    // Tombol salin lirik
+    const copyLyrBtn=document.createElement('button');
+    copyLyrBtn.className='mini-btn';
+    copyLyrBtn.style.fontSize='11px';
+    copyLyrBtn.style.padding='4px 9px';
+    copyLyrBtn.innerHTML='<i class="ti ti-copy"></i> Salin Lirik';
+    copyLyrBtn.onclick=(e)=>{
+      e.stopPropagation();
+      navigator.clipboard.writeText(f.lyrics).then(()=>{
+        copyLyrBtn.innerHTML='<i class="ti ti-check"></i> Tersalin!';
+        copyLyrBtn.style.borderColor='var(--green-mid)';
+        copyLyrBtn.style.color='var(--green)';
+        setTimeout(()=>{
+          copyLyrBtn.innerHTML='<i class="ti ti-copy"></i> Salin Lirik';
+          copyLyrBtn.style.borderColor='';
+          copyLyrBtn.style.color='';
+        },2000);
+      }).catch(()=>{
+        // Fallback manual select
+        const ta=document.createElement('textarea');
+        ta.value=f.lyrics;ta.style.position='fixed';ta.style.opacity='0';
+        document.body.appendChild(ta);ta.select();
+        document.execCommand('copy');document.body.removeChild(ta);
+        copyLyrBtn.innerHTML='<i class="ti ti-check"></i> Tersalin!';
+        setTimeout(()=>{copyLyrBtn.innerHTML='<i class="ti ti-copy"></i> Salin Lirik';},2000);
+      });
+    };
+
     const lyrBox=document.createElement('div');
     lyrBox.className='lyrics-box';
     lyrBox.textContent=f.lyrics;
-    lyrBtn.onclick=()=>{
+
+    lyrToggle.onclick=()=>{
       const open=lyrBox.classList.toggle('open');
-      lyrBtn.innerHTML=open?'<i class="ti ti-chevron-up"></i> Sembunyikan lirik':'<i class="ti ti-chevron-down"></i> Lihat lirik';
+      lyrToggle.innerHTML=open
+        ?'<i class="ti ti-chevron-up"></i> Sembunyikan lirik'
+        :'<i class="ti ti-chevron-down"></i> Lihat lirik';
     };
-    body.appendChild(lyrBtn);body.appendChild(lyrBox);
+
+    lyrHeader.appendChild(lyrToggle);
+    lyrHeader.appendChild(copyLyrBtn);
+    lyrSection.appendChild(lyrHeader);
+    lyrSection.appendChild(lyrBox);
+    body.appendChild(lyrSection);
   }
 
   // Raw data
